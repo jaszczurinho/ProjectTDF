@@ -1,0 +1,273 @@
+---
+title: "Tour de France tournament analysis"
+author: "Kacper Gałan"
+date: today
+format: 
+  html:
+    warning: false
+    message: false
+    echo: false
+    self-contained: true
+editor: visual
+---
+
+## Analysis of Tour de France results from years 1952-2016
+
+```{r}
+library(readODS)
+library(ggplot2)
+library(tidyverse)
+library(rstatix)
+library(gtsummary)
+library(rvest)
+library(gt)
+library(ggmap)
+library(flextable)
+library(gsubfn)
+library(ggthemes)
+library(plotly)
+library(plyr)
+library(groupdata2)
+library(reactable)
+library(highlight)
+
+
+dane = read_ods("tour_de_france.ods")
+colnames(dane) = c("Year",
+                   "Average pace(km/h) of winner",
+                   "Total distance(km)",
+                   "Number of stages",
+                   "Finished the race",
+                   "Number of entries",
+                   "Nationality of winner",
+                   "Team of winner",
+                   "Initial city",
+                   "Initial country")
+```
+
+### Intoduction
+
+```{r}
+#| label: tbl-overall
+#| tbl-cap: "The first six observations of the collected data"
+dane %>% 
+  head() %>% 
+  gt()
+```
+
+The presented dataset (@tbl-overall) contains information about the Tour de France cycling event, held between 1952 and 2016. The Tour de France is a multi-stage cycling race usually held in July across France and neighbouring countries. It is part of the World Tour series.
+
+The prestige of this race is linked to its long history (it is now the oldest cycling race), its great tradition and, above all, the scale of its difficulty. A particularly famous moment is the ascent of the L'Alpe d'Huez pass (see @fig-alpe): length of ascent - 13.8 km; average slope 7.9% (maximum 12%), elevation - 1126 metres.
+
+[![L'Alpe d'Huez Valley](images/Lacets_AlpedHuez.jpg){#fig-alpe fig-align="center" width="278"}](https://fr.wikipedia.org/wiki/Mont%C3%A9e_de_l%27Alpe_d%27Huez)
+
+### Analysis of gathered data
+
+#### Basic descriptive statistics
+
+```{r}
+#| label: tbl-opisowe
+#| tbl-cap: Basic statistical functions for a given set
+dane %>% 
+  select(`Average pace(km/h) of winner`, `Total distance(km)`, `Finished the race`, `Number of entries` ) %>% 
+  get_summary_stats() %>% 
+  select(Variable = variable, min, max, median, mean) %>% 
+  gt() %>% 
+  fmt_number(columns = 5, decimals = 2)
+
+```
+
+The analysis of a given topic should start with basic information about this set, which already allows us to notice the first correlations or observations (see @tbl-opisowe). For example, in the columns for median and mean, we can see how small the deviations are between the two measures.
+
+#### Starting towns of the Tour de France
+
+```{r}
+#| label: tbl-country
+#| tbl-cap: Countries where Tour de France started
+dane %>% 
+  select(`Initial country`) %>% 
+  group_by(`Initial country`) %>% 
+  dplyr::mutate("Sum" = n()) %>% 
+  unique() %>% 
+  flextable()
+```
+
+As you can see from the chart (see @tbl-country), it cannot be assumed that the race always starts in France. This can be seen even better in the map below (see @fig-maps). It shows how geographically diversed the tournament is.
+
+```{r}
+wektor1 = NULL
+wektor2 = NULL
+miasta = unique(dane[, 9])
+
+for (miasto in miasta) {
+  miasto = str_replace_all(miasto, " ", "_")
+  miasto = str_replace_all(str_replace_all(miasto, "St\\.", "Saint"), "_", "-")
+  miasto = str_replace_all(miasto, "Brest", "Brest,_France")
+  miasto = str_replace_all(miasto, "'s-Hertogenbosch", "%27s-Hertogenbosch")
+  miasto = str_replace_all(miasto, "La-Barre-de-Monts", "La_Barre-de-Monts")
+  miasto = str_replace_all(miasto, "Le-Puy-de-Fou", "Puy_du_Fou")
+  miasto = str_replace_all(miasto, "Le-Havre", "Le_Havre")
+  miasto = str_replace_all(miasto, "San-Sebastian", "San_Sebastián")
+  miasto = str_replace_all(miasto, "Nancy", "Nancy,_France")
+  miasto = str_replace_all(miasto, "Montreuil", "Montreuil,_Seine-Saint-Denis")
+  result = paste("https://en.wikipedia.org/wiki/", miasto, sep = "")
+  
+  for (r in result) {
+    url = read_html(r)
+
+    lat = url %>% 
+      html_nodes("span.latitude") %>% 
+      html_text()
+    
+    lat = str_replace_all(str_replace_all(lat[1], "[:punct:][:alpha:]", ""), "°", ".")
+    lat = str_extract_all(lat[1], "\\d\\d\\.[:digit:][:digit:]?")
+    lat = lat[[1]]
+    
+    wektor1 = append(wektor1, as.numeric(lat))
+    
+    lon = url %>% 
+      html_nodes("span.longitude") %>% 
+      html_text()
+    
+    if (grepl("W", lon[1], fixed = TRUE)) {
+      lon = paste("-", lon[1], sep = "")
+    }
+
+    lon = str_replace_all(str_replace_all(lon[1], "[:punct:][:alpha:]", ""), "°", ".")
+    lon = str_extract_all(lon, "\\-?\\d?\\d\\.\\d\\d?")
+    
+    wektor2 = append(wektor2, as.numeric(lon)) 
+  }
+}
+
+wspol = data.frame(x = wektor2, y = wektor1)
+```
+
+```{r}
+#| label: fig-maps
+#| fig-cap: Initial cities on the map of Europe
+ggmap::register_google(key = "AIzaSyDNq0npPq9JWzJM01_IElhpb8FWXM5zF_M", write = TRUE)
+
+
+get_googlemap(center = "Le Havre", zoom = 5, markers = wspol) %>% 
+  ggmap()
+
+```
+
+#### Who rode best?
+
+The table below (see @tbl-thebest) helps to answer the above question. It allows us to see that it was the **Irish** (!) who drove the most on average, while the highest speeds were achieved by the **British**.
+
+```{r}
+#| label: tbl-thebest
+#| tbl-cap: Results of the winning nations
+fajne = dane %>% 
+  drop_na() %>% 
+  group_by(`Nationality of winner`) %>% 
+  dplyr::mutate("Average distance" = mean(`Average pace(km/h) of winner`), "Average pace" = mean(`Total distance(km)`)) %>% 
+  select(`Nationality of winner`,"Average distance" ,"Average pace") %>% 
+  unique() 
+
+fajne %>%  
+  mutate_if(is.numeric, round, digits = 2) %>% 
+  flextable() %>% 
+  add_header_row(colwidths = 3,
+                 values = "Results") %>% 
+  theme_vanilla() %>% 
+  add_footer_lines("Osiągi zwycięskich narodowości") %>% 
+  color(part = "footer", color = "gray")
+
+```
+
+The distribution of average distance to average speed is visualised in the plot below (@fig-thebest).
+
+```{r}
+#| label: fig-thebest
+#| fig-cap: Visualisation of the performance of the individual winning nations
+h = fajne %>% 
+  ggplot()+
+  geom_point(aes(x = `Average distance`, 
+                 y = `Average pace`,
+                 color = `Nationality of winner`))
+
+ggplotly(h)
+```
+
+However, several observations were omitted from the above analysis. These are the rows containing *NA* (unspecified) values found, for example, in the *Narodowość zwycięzcy* column.
+
+```{r}
+wiersze = which(dane$Year %in% c(1999, 2005), arr.ind = TRUE)
+
+dane[seq(wiersze[1], wiersze[2], 1),] %>% 
+  gt()
+```
+
+We are referring to the historic events of the Tour de France between 1999 and 2005, when *Lance Armstrong*, American road cyclist, Olympian and 'author' of one of the biggest doping scandals in sports history, triumphed on the podium **seven times**. On 24 August 2012, he was retrospectively banned from competition from 1 August 1998 and disqualified from professional cycling for life for using prohibited boosters.
+
+```{r}
+dane2 = dane
+dane2[is.na(dane$`Nationality of winner`),]$`Nationality of winner` = "Lance Armstrong"
+
+fajne2 = dane2[is.na(dane$`Team of winner`),]%>% 
+  group_by(`Team of winner`) %>% 
+  dplyr::mutate("Average distance" = mean(`Total distance(km)`), "Average pace" = mean(`Average pace(km/h) of winner`)) %>% 
+  select(`Nationality of winner`,"Average distance" ,"Average pace") %>% 
+  unique() %>% 
+  mutate_if(is.numeric, round, digits = 2) %>% 
+  as.data.frame() %>% 
+  flextable() %>% 
+  theme_vanilla()
+
+fajne2
+```
+
+The table above shows Armstrong's average performance. It is worth comparing his average speed with the fastest nation at the tournament - the British. The difference is (km/h):
+
+```{r}
+max(fajne2$body$dataset$`Średnia prędkość`) - max(fajne$`Średnia prędkość`)
+```
+
+The American, thanks to doping , he rode on average the **fastest** in the entire tournament in the years under discussion.
+
+#### Ratio of those enrolled to those who completed the competition
+
+The *Percent* column in the graph below expresses the percentage ratio of the variable *Number of entries* to *Finished the race* in the years in question. From the table below we do not notice any particular correlation between the years and the relationship in question.
+
+```{r}
+dane1 = dane
+dane1$Year= cut(dane1$Year, breaks = 10)
+
+dane1 %>% 
+  group_by(Year) %>%
+  dplyr::mutate(competitors = `Finished the race`/`Number of entries`) %>% 
+  select(Year, competitors) %>%
+  group_by(Year) %>%
+  dplyr::mutate("Percentage" = round(mean(competitors)*100),2) %>% 
+  select(Year, "Percentage") %>% 
+  arrange(desc(Percentage)) %>% 
+  unique() %>% 
+  flextable()
+
+```
+
+#### Number of stages vs. total distance
+
+The graphic below shows the ratio of the variable *Number of stages* to the variable *Total distance(km)* by country where the race has started at least twice. From the graph we can read the obvious relationship - the more stages, the longer the race.
+
+```{r}
+#| label: fig-etapy
+#| fig-cap: Number of stages vs. Total distance
+mm = dane %>% 
+  select(`Number of stages`, `Total distance(km)`, `Initial country`) %>% 
+  group_by(`Initial country`) %>% 
+  dplyr::mutate(n=n()) 
+  
+elo = mm[which(mm[,4]>2),] %>% 
+  ggplot(aes(`Number of stages`, `Total distance(km)`, color = `Initial country`  ))+
+  geom_point()+
+  geom_smooth(method = lm, se = FALSE)+
+  facet_wrap(~`Initial country`)
+  
+
+ggplotly(elo)
+```
